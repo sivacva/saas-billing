@@ -2,7 +2,7 @@
 
 A usage-based billing backend: merchants define plans (flat price + included usage + overage rate), their customers subscribe, usage gets logged per subscription, and invoices are generated automatically at the end of each billing cycle — with proration for customers who joined or switched plans mid-cycle.
 
-This is an API backend only. There's no UI.
+This is an API backend — the one UI-shaped thing in the repo is a local-only convenience page (`/dashboard-preview/{merchant}`) that renders the real dashboard endpoint's JSON in a browser; see [Running it](#running-it). It's gated to the `local` environment and isn't part of the graded API surface.
 
 ## Domain model
 
@@ -70,6 +70,10 @@ php artisan tinker
 
 Send that as `Authorization: Bearer <token>`. See [Assumptions](#assumptions--open-questions) for what this token does and doesn't prove right now.
 
+**Viewing the dashboard without Postman:** visit `http://127.0.0.1:8000/dashboard-preview/{merchant-id}` in a browser. It mints its own throwaway token server-side and fetches the real `GET /api/merchants/{id}/dashboard` endpoint client-side — a plain browser tab can't set an `Authorization` header itself, so this exists purely so the real output is visible without a REST client. Local-environment-only; the route doesn't exist otherwise.
+
+**If `php` won't run at all on Windows** with an error mentioning "Device Guard" or "Application Control": that's almost certainly **Smart App Control** (Settings → Privacy & security → Windows Security → App & browser control), a Windows 11 feature that blocks unrecognized binaries — WinGet-installed PHP trips it. Turning it off there fixes it; note that Microsoft only allows that switch to go one direction without a clean Windows install (off is easy, back on isn't). Not related to anything in this app — cost real debugging time during development, worth flagging so it doesn't cost you the same.
+
 **Tests:**
 
 ```bash
@@ -113,6 +117,10 @@ Both are single classes owning their own cache-key format — nothing else in th
 `GenerateInvoiceForSubscription` calls the rollup logic itself (through the closing day specifically) before reading totals, rather than trusting that the two scheduled jobs ran in the right order — it's correct even if run standalone.
 
 The proration math (`InvoiceCalculator`, `DashboardCalculator`) is deliberately isolated from anything that touches the database or a queue — plain classes, `bcmath` arithmetic over plain string inputs, no Eloquent. This wasn't just a style preference: it's what let bugs get caught by fast, deterministic unit tests during development (a `bcmath` scale-truncation bug and a precision-loss bug from computing a day-fraction before multiplying, both in `InvoiceCalculator`; see its test file for the fixed numbers) rather than surviving into a slow, DB-backed test or production.
+
+### A second real bug, in `bootstrap/app.php`
+
+Laravel's `ApplicationBuilder` unconditionally defaults every app to `redirectGuestsTo(fn () => route('login'))`, before any app-level middleware configuration runs. This app has no `login` route — no web auth, API-only — so an unauthenticated request that doesn't explicitly ask for JSON (opened directly in a browser, or missing an `Accept` header) crashed with `RouteNotFoundException` instead of a clean `401`, because the guest-redirect middleware tried to build a URL for a route that was never defined. Fixed in `bootstrap/app.php` by overriding it to `redirectGuestsTo(fn () => null)` — never redirect, always fall through to a normal `AuthenticationException`, which the existing `shouldRenderJsonWhen` exception config already renders correctly as JSON for API requests. Found by actually hitting the running app with a browser-shaped request, not by reading the code.
 
 ### Rate limiting
 
